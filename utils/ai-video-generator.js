@@ -1,0 +1,1020 @@
+const OpenAI = require('openai');
+const Replicate = require('replicate');
+const fs = require('fs').promises;
+const path = require('path');
+const { pathToFileURL } = require('url');
+const axios = require('axios');
+const { Logger } = require('./logger');
+const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
+const { MediaGenerationService } = require('./media-generation-service');
+
+class AIVideoGenerator {
+  constructor(credentials, options = {}) {
+    this.logger = new Logger('AIVideoGenerator');
+    const resolvedCredentials = credentials?.credentials || credentials || {};
+    this.db = options.db || null;
+    this.lastVideoResult = null;
+    this.lastNarrationResult = null;
+    
+    // Initialize AI services with graceful fallback
+    const openaiKey = resolvedCredentials.openai?.apiKey || process.env.OPENAI_API_KEY;
+    const replicateKey = resolvedCredentials.replicate?.apiKey || process.env.REPLICATE_API_TOKEN || process.env.REPLICATE_API_KEY;
+    
+    if (openaiKey) {
+      this.openai = new OpenAI({ apiKey: openaiKey });
+      this.logger.info('OpenAI service initialized');
+    } else {
+      this.logger.warn('OpenAI API key not found - AI features will be simulated');
+    }
+    
+    if (replicateKey) {
+      this.replicate = new Replicate({ auth: replicateKey });
+      this.logger.info('Replicate service initialized');
+    } else {
+      this.logger.warn('Replicate API key not found - advanced video generation unavailable');
+    }
+
+    // Gemini media generation (images + native TTS) — free-tier alternative to OpenAI
+    const geminiKey = resolvedCredentials.gemini?.apiKey || process.env.GEMINI_API_KEY;
+    if (geminiKey) {
+      try {
+        const genaiModule = require('@google/genai');
+        const GoogleGenAI = genaiModule.GoogleGenAI || genaiModule.default?.GoogleGenAI;
+        this.gemini = new GoogleGenAI({ apiKey: geminiKey });
+        this.logger.info('Gemini media service initialized (images + TTS)');
+      } catch (error) {
+        this.logger.warn('Failed to initialize Gemini media service:', error.message);
+      }
+    }
+    
+    // ElevenLabs configuration
+    this.elevenLabsApiKey = resolvedCredentials.elevenLabs?.apiKey || process.env.ELEVENLABS_API_KEY;
+    this.elevenLabsVoiceId = resolvedCredentials.elevenLabs?.voiceId || process.env.ELEVENLABS_VOICE_ID;
+    this.elevenLabsModel = process.env.ELEVENLABS_TTS_MODEL || 'eleven_v3';
+    
+    // Azure Speech configuration
+    this.azureSpeechKey = resolvedCredentials.azure?.speechKey || process.env.AZURE_SPEECH_KEY;
+    this.azureSpeechRegion = resolvedCredentials.azure?.speechRegion || process.env.AZURE_SPEECH_REGION;
+    this.mediaGeneration = options.mediaGeneration || (this.db
+      ? new MediaGenerationService(this.db, resolvedCredentials, { logger: this.logger })
+      : null);
+  }
+
+  async generateTTSAudio(text, outputPath) {
+    this.logger.info('Generating TTS audio...');
+    this.lastNarrationResult = null;
+    let provider = 'simulation';
+    let model = null;
+
+    try {
+      let generatedPath;
+      if (this.elevenLabsApiKey && this.elevenLabsVoiceId) {
+        provider = 'elevenlabs';
+        model = this.elevenLabsModel;
+        generatedPath = await this.generateElevenLabsTTS(text, outputPath);
+      } else if (this.openai) {
+        provider = 'openai';
+        model = 'gpt-4o-mini-tts';
+        generatedPath = await this.generateOpenAITTS(text, outputPath);
+      } else if (this.gemini) {
+        provider = 'gemini';
+        model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
+        generatedPath = await this.generateGeminiTTS(text, outputPath);
+      } else {
+        generatedPath = await this.simulateTTSGeneration(text, outputPath);
+      }
+
+      const usable = await this.isUsableAudioFile(generatedPath);
+      this.lastNarrationResult = {
+        status: usable ? 'ready' : 'unavailable',
+        path: generatedPath,
+        provider,
+        model,
+        externalTaskId: null,
+        generatedAt: new Date().toISOString(),
+        simulated: !usable,
+        cost: { provider, amount: null, currency: null, invoiceRequired: provider !== 'simulation' }
+      };
+      return generatedPath;
+    } catch (error) {
+      this.lastNarrationResult = {
+        status: 'failed', path: null, provider, model, externalTaskId: null,
+        generatedAt: new Date().toISOString(), simulated: false, error: error.message,
+        cost: { provider, amount: null, currency: null, invoiceRequired: provider !== 'simulation' }
+      };
+      this.logger.error('TTS generation failed:', error);
+      throw error;
+    }
+  }
+
+  async generateElevenLabsTTS(text, outputPath) {
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${this.elevenLabsVoiceId}`;
+    
+    const data = {
+      text: text,
+      model_id: this.elevenLabsModel,
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.8,
+        style: 0.0,
+        use_speaker_boost: true
+      }
+    };
+
+    const response = await axios({
+      method: 'POST',
+      url: url,
+      data: data,
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': this.elevenLabsApiKey
+      },
+      responseType: 'stream'
+    });
+
+    const writer = require('fs').createWriteStream(outputPath);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', () => {
+        this.logger.info('ElevenLabs TTS generation complete');
+        resolve(outputPath);
+      });
+      writer.on('error', reject);
+    });
+  }
+
+  async generateOpenAITTS(text, outputPath) {
+    const response = await this.openai.audio.speech.create({
+      model: "gpt-4o-mini-tts",
+      voice: "coral",
+      input: text,
+      speed: 1.0
+    });
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.writeFile(outputPath, buffer);
+
+    this.logger.info('OpenAI TTS generation complete');
+    return outputPath;
+  }
+
+  async generateGeminiTTS(text, outputPath) {
+    const model = process.env.GEMINI_TTS_MODEL || 'gemini-3.1-flash-tts-preview';
+    const voiceName = process.env.GEMINI_TTS_VOICE || 'Kore';
+
+    const response = await this.gemini.models.generateContent({
+      model,
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName }
+          }
+        }
+      }
+    });
+
+    const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!audioData) {
+      throw new Error('Gemini TTS returned no audio data');
+    }
+
+    // Gemini returns raw PCM (24kHz, mono, 16-bit); encode to the requested container via FFmpeg
+    const pcmPath = outputPath + '.pcm';
+    await fs.writeFile(pcmPath, Buffer.from(audioData, 'base64'));
+    await runFFmpeg(['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcmPath, outputPath]);
+    await fs.unlink(pcmPath).catch(() => {});
+
+    this.logger.info('Gemini TTS generation complete');
+    return outputPath;
+  }
+
+  async generateVisualAssets(prompt, style = "ethereal", count = 1) {
+    this.logger.info(`Generating ${count} visual assets with style: ${style}`);
+
+    try {
+      if (!this.openai && !this.gemini) {
+        return await this.simulateVisualAssets(prompt, style, count);
+      }
+
+      const enhancedPrompt = this.enhanceVisualPrompt(prompt, style);
+      const localPaths = [];
+
+      for (let i = 0; i < count; i++) {
+        const imagePath = path.join(__dirname, '..', 'data', 'assets', `visual_${Date.now()}_${i}.png`);
+        await this.generateImage(enhancedPrompt, imagePath);
+        localPaths.push(imagePath);
+      }
+
+      this.logger.info(`Generated ${localPaths.length} visual assets`);
+      return localPaths;
+    } catch (error) {
+      this.logger.error('Visual asset generation failed:', error);
+      return await this.simulateVisualAssets(prompt, style, count);
+    }
+  }
+
+  async generateImage(prompt, imagePath) {
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+
+    if (this.openai) {
+      return await this.generateOpenAIImage(prompt, imagePath);
+    }
+
+    if (this.gemini) {
+      return await this.generateGeminiImage(prompt, imagePath);
+    }
+
+    throw new Error('No image generation provider configured');
+  }
+
+  async generateOpenAIImage(prompt, imagePath) {
+    const response = await this.openai.images.generate({
+      model: "gpt-image-2",
+      prompt: prompt,
+      n: 1,
+      size: "1536x1024",
+      quality: "high",
+    });
+
+    if (response.data[0].b64_json) {
+      const buffer = Buffer.from(response.data[0].b64_json, 'base64');
+      await fs.writeFile(imagePath, buffer);
+    } else {
+      await this.downloadImage(response.data[0].url, imagePath);
+    }
+
+    return imagePath;
+  }
+
+  async generateGeminiImage(prompt, imagePath) {
+    const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image';
+
+    const response = await this.gemini.models.generateContent({
+      model,
+      contents: prompt
+    });
+
+    const parts = response.candidates?.[0]?.content?.parts || [];
+    const imagePart = parts.find(part => part.inlineData?.data);
+    if (!imagePart) {
+      throw new Error('Gemini image generation returned no image data');
+    }
+
+    await fs.writeFile(imagePath, Buffer.from(imagePart.inlineData.data, 'base64'));
+    return imagePath;
+  }
+
+  enhanceVisualPrompt(prompt, style) {
+    const styleEnhancements = {
+      ethereal: "ethereal, dreamy, mystical, soft lighting, floating particles, cosmic background",
+      modern: "modern, clean, minimalist, professional, sleek design, contemporary",
+      animated: "animated style, cartoon, vibrant colors, expressive, dynamic",
+      cinematic: "cinematic lighting, dramatic, movie poster style, high contrast",
+      abstract: "abstract art, geometric shapes, gradient colors, artistic composition"
+    };
+
+    const enhancement = styleEnhancements[style] || styleEnhancements.ethereal;
+    return `${prompt}, ${enhancement}, high quality, 16:9 aspect ratio, digital art`;
+  }
+
+  async downloadImage(url, outputPath) {
+    const response = await axios({
+      method: 'GET',
+      url: url,
+      responseType: 'stream'
+    });
+
+    const writer = require('fs').createWriteStream(outputPath);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+  }
+
+  async generateVideo(script, visualAssets, audioPath, outputPath, options = {}) {
+    this.logger.info('Generating video from assets...');
+    this.lastVideoResult = null;
+    try {
+      if (this.mediaGeneration && options.productionId) {
+        const generated = await this.mediaGeneration.generateClips({
+          jobId: options.jobId || null,
+          productionId: options.productionId,
+          script,
+          visualAssets,
+          outputDir: path.dirname(outputPath)
+        });
+        if (generated.clips.length) {
+          const produced = await this.generateHybridVideo(
+            generated.clips,
+            visualAssets,
+            audioPath,
+            outputPath,
+            options.estimatedDuration || this.calculateScriptDuration(script)
+          );
+          this.lastVideoResult = {
+            requestedProvider: generated.requestedProvider,
+            actualProvider: generated.actualProvider,
+            model: generated.model,
+            mode: generated.settings.mode,
+            generatedSeconds: generated.clips.reduce((total, clip) => total + clip.duration, 0),
+            tasks: generated.clips.map(clip => ({ scene: clip.index, taskId: clip.taskId, provider: clip.provider, model: clip.model })),
+            scenes: generated.clips.map(clip => ({
+              index: clip.index, label: clip.label, prompt: clip.prompt, duration: clip.duration,
+              path: clip.path, taskId: clip.taskId, provider: clip.provider, model: clip.model
+            }))
+          };
+          return produced;
+        }
+      }
+
+      const produced = await this.generateSlideshowVideo(script, visualAssets, audioPath, outputPath);
+      this.lastVideoResult = { requestedProvider: 'slideshow', actualProvider: 'slideshow', model: 'local-ffmpeg', mode: 'slideshow', generatedSeconds: 0, tasks: [], scenes: [] };
+      return produced;
+    } catch (error) {
+      // The Logger's console line only shows the message string, so put the real
+      // reason inline. Previously the stack alone went to the file transport and
+      // the console printed "Video generation failed:" with no detail.
+      const reason = error && error.message ? error.message : String(error);
+      this.logger.error(`Video provider generation failed; using the local slideshow: ${reason}`, error);
+      try {
+        const produced = await this.generateSlideshowVideo(script, visualAssets, audioPath, outputPath);
+        this.lastVideoResult = {
+          requestedProvider: this.lastVideoResult?.requestedProvider || 'configured-provider',
+          actualProvider: 'slideshow', model: 'local-ffmpeg', mode: 'fallback', generatedSeconds: 0,
+          fallbackReason: reason, tasks: [], scenes: []
+        };
+        return produced;
+      } catch (fallbackError) {
+        this.logger.error(`Local slideshow fallback failed: ${fallbackError.message}`, fallbackError);
+        const produced = await this.simulateVideoGeneration(script, visualAssets, audioPath, outputPath);
+        this.lastVideoResult = {
+          requestedProvider: 'configured-provider', actualProvider: 'simulation', model: null,
+          mode: 'simulation', generatedSeconds: 0, fallbackReason: `${reason}; ${fallbackError.message}`, tasks: [], scenes: []
+        };
+        return produced;
+      }
+    }
+  }
+
+  async generateHybridVideo(clips, visualAssets, audioPath, outputPath, totalDuration) {
+    if (!(await checkFFmpeg())) throw new Error(ffmpegInstallHint());
+    const validImages = await this.filterLocalImageAssets(visualAssets);
+    const segments = clips.map(clip => ({ type: 'video', path: clip.path, duration: clip.duration }));
+    const generatedDuration = segments.reduce((sum, item) => sum + item.duration, 0);
+    const remaining = Math.max(0, this.parseDurationSeconds(totalDuration) - generatedDuration);
+    if (remaining && validImages.length) {
+      const perImage = Math.max(2, remaining / validImages.length);
+      for (const imagePath of validImages) segments.push({ type: 'image', path: imagePath, duration: perImage });
+    }
+    if (!segments.length) throw new Error('No usable provider clips or still images were generated');
+
+    const visualPath = outputPath.replace(/\.mp4$/i, '_hybrid_visual.mp4');
+    await this.renderMediaTimeline(segments, visualPath);
+    await this.addAudioToVideo(visualPath, audioPath, outputPath, { loopVideo: true });
+    await fs.unlink(visualPath).catch(() => {});
+    return outputPath;
+  }
+
+  async renderMediaTimeline(segments, outputPath) {
+    const validSegments = [];
+    for (const segment of segments) {
+      let segPath = segment.path;
+      if (typeof segPath === 'string' && (segPath.endsWith('.info') || (!segPath.endsWith('.png') && !segPath.endsWith('.jpg') && !segPath.endsWith('.jpeg') && !segPath.endsWith('.mp4')))) {
+        const replacement = await this.simulateVisualAssets('YouTube Video Visual', 'ethereal', 1);
+        segPath = replacement[0];
+        segment.type = 'image';
+      }
+      validSegments.push({ ...segment, path: segPath });
+    }
+    const args = ['-y'];
+    for (const segment of validSegments) {
+      if (segment.type === 'image') args.push('-loop', '1', '-t', Number(segment.duration).toFixed(2), '-framerate', '30', '-i', segment.path);
+      else args.push('-stream_loop', '-1', '-i', segment.path);
+    }
+    const filters = validSegments.map((segment, index) =>
+      `[${index}:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p,trim=duration=${Number(segment.duration).toFixed(2)},setpts=PTS-STARTPTS[v${index}]`
+    );
+    filters.push(`${validSegments.map((_, index) => `[v${index}]`).join('')}concat=n=${validSegments.length}:v=1:a=0[vout]`);
+    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputPath);
+    await runFFmpeg(args);
+    return outputPath;
+  }
+
+  async filterLocalImageAssets(visualAssets = []) {
+    const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+    const images = [];
+    for (const asset of visualAssets) {
+      if (typeof asset !== 'string' || !imageExtensions.has(path.extname(asset).toLowerCase())) continue;
+      try {
+        await fs.access(asset);
+        images.push(asset);
+      } catch (_error) { /* ignore missing assets */ }
+    }
+    return images;
+  }
+
+  parseDurationSeconds(value) {
+    if (Number.isFinite(Number(value))) return Math.max(0, Number(value));
+    const parts = String(value || '').split(':').map(Number);
+    if (parts.length === 2 && parts.every(Number.isFinite)) return Math.max(0, parts[0] * 60 + parts[1]);
+    if (parts.length === 3 && parts.every(Number.isFinite)) return Math.max(0, parts[0] * 3600 + parts[1] * 60 + parts[2]);
+    return 0;
+  }
+
+  async generateReplicateVideo(script, visualAssets, audioPath, outputPath) {
+    const output = await this.replicate.run(
+      "wan-video/wan-2.7-i2v",
+      {
+        input: {
+          image: visualAssets[0],
+          prompt: script.title || "smooth cinematic motion",
+          duration: 5,
+          resolution: "720p"
+        }
+      }
+    );
+
+    // Download the generated video
+    if (output && output.length > 0) {
+      await this.downloadVideo(output[0], outputPath);
+      
+      // Add audio track
+      await this.addAudioToVideo(outputPath, audioPath, outputPath);
+    }
+
+    return outputPath;
+  }
+
+  async generateSlideshowVideo(script, visualAssets, audioPath, outputPath) {
+    this.logger.info('Creating slideshow video...');
+
+    if (!(await checkFFmpeg())) {
+      throw new Error(ffmpegInstallHint());
+    }
+
+    const { chromium } = require('playwright');
+    const browser = await chromium.launch();
+    const slidesDir = path.join(path.dirname(outputPath), 'slides');
+
+    try {
+      const page = await browser.newPage();
+      await page.setViewportSize({ width: 1920, height: 1080 });
+
+      // Create HTML for slideshow (only real image files can be embedded)
+      const imageAssets = await this.filterImageAssets(visualAssets);
+      await page.setContent(this.createSlideshowHTML(script, imageAssets));
+
+      // Freeze CSS transitions/animations so each still is captured fully rendered
+      await page.addStyleTag({ content: '* { transition: none !important; animation: none !important; }' });
+      await page.waitForTimeout(1000); // Wait for assets to load
+
+      // Capture ONE still per slide instead of screenshotting at 30fps —
+      // FFmpeg turns the stills into a crossfaded video in seconds.
+      const slideCount = await page.evaluate(() => document.querySelectorAll('.slide').length);
+      await fs.mkdir(slidesDir, { recursive: true });
+
+      const stills = [];
+      for (let i = 0; i < slideCount; i++) {
+        await page.evaluate((index) => {
+          document.querySelectorAll('.slide').forEach((slide, s) => {
+            slide.classList.toggle('active', s === index);
+          });
+        }, i);
+
+        const stillPath = path.join(slidesDir, `slide_${String(i).padStart(3, '0')}.png`);
+        await page.screenshot({ path: stillPath });
+        stills.push(stillPath);
+      }
+
+      const videoPath = outputPath.replace('.mp4', '_visual.mp4');
+      const duration = this.calculateScriptDuration(script);
+      await this.renderSlidesToVideo(stills, duration, videoPath);
+
+      // Add audio
+      await this.addAudioToVideo(videoPath, audioPath, outputPath);
+
+      return outputPath;
+    } finally {
+      await browser.close().catch(() => {});
+      await this.cleanupDirectory(slidesDir);
+    }
+  }
+
+  async renderSlidesToVideo(stills, totalDuration, videoPath) {
+    if (stills.length === 0) {
+      throw new Error('No slides to render');
+    }
+
+    const fade = 0.5;
+    const perSlide = Math.max(2, totalDuration / stills.length);
+
+    const args = ['-y'];
+    for (const still of stills) {
+      args.push('-loop', '1', '-t', perSlide.toFixed(2), '-framerate', '30', '-i', still);
+    }
+
+    if (stills.length === 1) {
+      args.push('-vf', 'format=yuv420p', '-c:v', 'libx264', videoPath);
+      await runFFmpeg(args);
+      return videoPath;
+    }
+
+    // Chain crossfades: transition k starts fade seconds before slide k ends
+    const filters = [];
+    let prev = '[0:v]';
+    for (let i = 1; i < stills.length; i++) {
+      const out = `[v${i}]`;
+      const offset = (i * (perSlide - fade)).toFixed(2);
+      filters.push(`${prev}[${i}:v]xfade=transition=fade:duration=${fade}:offset=${offset}${out}`);
+      prev = out;
+    }
+    filters.push(`${prev}format=yuv420p[vfinal]`);
+
+    args.push(
+      '-filter_complex', filters.join(';'),
+      '-map', '[vfinal]',
+      '-c:v', 'libx264',
+      '-r', '30',
+      videoPath
+    );
+
+    await runFFmpeg(args);
+    return videoPath;
+  }
+
+  async filterImageAssets(visualAssets = []) {
+    const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+    const images = [];
+
+    for (const asset of visualAssets) {
+      if (typeof asset !== 'string' || !imageExtensions.has(path.extname(asset).toLowerCase())) {
+        continue;
+      }
+
+      try {
+        await fs.access(asset);
+        images.push(pathToFileURL(asset).href);
+      } catch (error) {
+        // Skip missing files
+      }
+    }
+
+    return images;
+  }
+
+  createSlideshowHTML(script, visualAssets) {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            width: 1920px;
+            height: 1080px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        
+        .slide {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 2s ease-in-out;
+        }
+        
+        .slide.active {
+            opacity: 1;
+        }
+        
+        .content {
+            text-align: center;
+            color: white;
+            max-width: 80%;
+        }
+        
+        h1 {
+            font-size: 72px;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        h2 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        p {
+            font-size: 36px;
+            line-height: 1.4;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+        
+        .background-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.3;
+            z-index: -1;
+        }
+        
+        .particles {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: -1;
+        }
+        
+        .particle {
+            position: absolute;
+            background: rgba(255,255,255,0.8);
+            border-radius: 50%;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="particles"></div>
+    
+    <!-- Title Slide -->
+    <div class="slide active">
+        ${visualAssets[0] ? `<img class="background-image" src="${visualAssets[0]}" />` : ''}
+        <div class="content">
+            <h1>${script.title}</h1>
+            <p>Ethereal Dreamscript</p>
+        </div>
+    </div>
+    
+    ${this.generateContentSlides(script, visualAssets).join('')}
+    
+    <!-- Subscribe Slide -->
+    <div class="slide">
+        <div class="content">
+            <h2>✨ Subscribe for More Stories ✨</h2>
+            <p>New content daily at 2:00 PM</p>
+        </div>
+    </div>
+    
+    <script>
+        // Create floating particles
+        function createParticles() {
+            const container = document.querySelector('.particles');
+            for (let i = 0; i < 20; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.top = Math.random() * 100 + '%';
+                particle.style.width = (Math.random() * 4 + 2) + 'px';
+                particle.style.height = particle.style.width;
+                particle.style.animationDelay = Math.random() * 6 + 's';
+                container.appendChild(particle);
+            }
+        }
+        
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        
+        function advanceAnimation() {
+            slides[currentSlide].classList.remove('active');
+            currentSlide = (currentSlide + 1) % slides.length;
+            slides[currentSlide].classList.add('active');
+        }
+        
+        window.advanceAnimation = advanceAnimation;
+        createParticles();
+    </script>
+</body>
+</html>`;
+  }
+
+  generateContentSlides(script, visualAssets) {
+    const slides = [];
+    
+    if (script.mainContent && script.mainContent.sections) {
+      script.mainContent.sections.forEach((section, index) => {
+        const assetIndex = Math.min(index + 1, visualAssets.length - 1);
+        
+        slides.push(`
+        <div class="slide">
+            ${visualAssets[assetIndex] ? `<img class="background-image" src="${visualAssets[assetIndex]}" />` : ''}
+            <div class="content">
+                <h2>${section.title}</h2>
+                ${this.formatSectionContent(section)}
+            </div>
+        </div>`);
+      });
+    }
+    
+    return slides;
+  }
+
+  formatSectionContent(section) {
+    if (section.items && Array.isArray(section.items)) {
+      return section.items.slice(0, 3).map(item => 
+        `<p>${item.number}. ${item.title}</p>`
+      ).join('');
+    }
+    
+    if (section.steps && Array.isArray(section.steps)) {
+      return section.steps.slice(0, 3).map(step => 
+        `<p>${step.title}</p>`
+      ).join('');
+    }
+    
+    if (typeof section.content === 'string') {
+      return `<p>${section.content.slice(0, 200)}${section.content.length > 200 ? '...' : ''}</p>`;
+    }
+    
+    return '<p>Content coming soon...</p>';
+  }
+
+  calculateScriptDuration(script) {
+    // Estimate duration based on word count (average 150 words per minute)
+    let totalWords = 0;
+    
+    if (script.hook) totalWords += script.hook.text.split(' ').length;
+    if (script.introduction) {
+      totalWords += (script.introduction.greeting || '').split(' ').length;
+      totalWords += (script.introduction.topicIntro || '').split(' ').length;
+    }
+    
+    if (script.mainContent && script.mainContent.sections) {
+      script.mainContent.sections.forEach(section => {
+        if (typeof section.content === 'string') {
+          totalWords += section.content.split(' ').length;
+        }
+        if (section.items) {
+          section.items.forEach(item => {
+            totalWords += (item.title + ' ' + item.description).split(' ').length;
+          });
+        }
+        if (section.steps) {
+          section.steps.forEach(step => {
+            totalWords += (step.title + ' ' + step.description).split(' ').length;
+          });
+        }
+      });
+    }
+    
+    if (script.conclusion) {
+      totalWords += script.conclusion.finalThought.split(' ').length;
+    }
+    
+    // Convert to duration (150 words per minute)
+    return Math.max(30, Math.ceil((totalWords / 150) * 60));
+  }
+
+  async addAudioToVideo(videoPath, audioPath, outputPath, options = {}) {
+    const hasRealAudio = await this.isUsableAudioFile(audioPath);
+
+    if (!hasRealAudio) {
+      if (options.allowSilent === true) {
+        this.logger.warn('Creating an intentionally silent video from an operator-confirmed override.');
+        if (videoPath !== outputPath) await fs.copyFile(videoPath, outputPath);
+        return outputPath;
+      }
+      const error = new Error('Narration audio is required. Regenerate narration or explicitly confirm an intentional silent video.');
+      error.code = 'NARRATION_REQUIRED';
+      throw error;
+    }
+
+    // FFmpeg cannot write to its own input, so mux to a temp file when paths collide
+    const muxPath = outputPath === videoPath
+      ? outputPath.replace(/\.mp4$/i, '_muxed.mp4')
+      : outputPath;
+
+    const videoInput = options.loopVideo ? ['-stream_loop', '-1', '-i', videoPath] : ['-i', videoPath];
+    await runFFmpeg(['-y', ...videoInput, '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-shortest', muxPath]);
+
+    if (muxPath !== outputPath) {
+      await fs.rename(muxPath, outputPath);
+    }
+
+    this.logger.info('Audio added to video successfully');
+    return outputPath;
+  }
+
+  async isUsableAudioFile(audioPath) {
+    if (typeof audioPath !== 'string' || audioPath.endsWith('.info')) {
+      return false;
+    }
+
+    try {
+      const stats = await fs.stat(audioPath);
+      return stats.isFile() && stats.size > 0;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async downloadVideo(url, outputPath) {
+    const response = await axios({
+      method: 'GET',
+      url: url,
+      responseType: 'stream'
+    });
+
+    const writer = require('fs').createWriteStream(outputPath);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+  }
+
+  async cleanupDirectory(dirPath) {
+    try {
+      const files = await fs.readdir(dirPath);
+      for (const file of files) {
+        await fs.unlink(path.join(dirPath, file));
+      }
+      await fs.rmdir(dirPath);
+    } catch (error) {
+      this.logger.warn('Cleanup failed:', error.message);
+    }
+  }
+
+  async generateThumbnail(script, style = "ethereal") {
+    this.logger.info('Generating custom thumbnail...');
+
+    try {
+      if (!this.openai && !this.gemini) {
+        return await this.simulateThumbnailGeneration(script, style);
+      }
+
+      const prompt = `YouTube thumbnail for "${script.title}", ${style} style, eye-catching, high contrast text, professional design, clickable, engaging`;
+      const thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_${Date.now()}.png`);
+
+      await this.generateImage(prompt, thumbnailPath);
+
+      return {
+        path: thumbnailPath,
+        dimensions: { width: 1536, height: 1024 },
+        fileSize: await this.getFileSize(thumbnailPath)
+      };
+    } catch (error) {
+      this.logger.error('Thumbnail generation failed:', error);
+      return await this.simulateThumbnailGeneration(script, style);
+    }
+  }
+
+  async getFileSize(filePath) {
+    const stats = await fs.stat(filePath);
+    return stats.size;
+  }
+
+  // Simulation methods for when APIs are not available
+  async simulateTTSGeneration(text, outputPath) {
+    this.logger.info('Simulating TTS generation...');
+    
+    const infoPath = outputPath + '.info';
+    await fs.writeFile(infoPath, JSON.stringify({
+      message: 'AI TTS audio would be generated here',
+      text: text.substring(0, 100) + '...',
+      timestamp: new Date().toISOString()
+    }, null, 2));
+    
+    return infoPath;
+  }
+
+  escapeHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  async simulateVisualAssets(prompt, style, count) {
+    this.logger.info(`Generating ${count} PNG visual assets...`);
+    await fs.mkdir(path.join(__dirname, '..', 'data', 'assets'), { recursive: true });
+    const paths = [];
+
+    let sharp = null;
+    try {
+      sharp = require('sharp');
+    } catch (_err) { /* ignore */ }
+
+    for (let i = 0; i < count; i++) {
+      const assetPath = path.join(__dirname, '..', 'data', 'assets', `visual_asset_${Date.now()}_${i}.png`);
+      const safeTitle = this.escapeHtml(prompt || 'YouTube Automation Scene');
+      const safeStyle = this.escapeHtml(style || 'MODERN').toUpperCase();
+
+      if (sharp) {
+        try {
+          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+            <defs>
+              <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#0f172a"/>
+                <stop offset="50%" stop-color="#1e1b4b"/>
+                <stop offset="100%" stop-color="#311042"/>
+              </linearGradient>
+            </defs>
+            <rect width="1920" height="1080" fill="url(#bg)"/>
+            <rect x="1560" y="40" width="320" height="60" rx="30" fill="rgba(99,102,241,0.3)" stroke="#6366f1" stroke-width="2"/>
+            <text x="1720" y="78" font-family="sans-serif" font-size="22" font-weight="bold" fill="#a5b4fc" text-anchor="middle">${safeStyle}</text>
+            <text x="960" y="520" font-family="sans-serif" font-size="52" font-weight="bold" fill="#38bdf8" text-anchor="middle">${safeTitle.substring(0, 50)}</text>
+            <text x="960" y="600" font-family="sans-serif" font-size="30" fill="#94a3b8" text-anchor="middle">Visual Scene ${i + 1} of ${count}</text>
+          </svg>`;
+          await sharp(Buffer.from(svg)).png().toFile(assetPath);
+          paths.push(assetPath);
+          continue;
+        } catch (_err) { /* fallback */ }
+      }
+
+      const fallbackPng = Buffer.from(
+        'iVBORw0KGgoAAAANSU5QAAAAIAAACAAACAAAAA/Xg+MAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAACXBIWXMAAAsTAAALEwEAmpwYAAABWWlYWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNS40LjAiPgogICA8cmRmOlJERiB4bWxuczpjaGVja3N1bT0iaHR0cDovL25zLmFkb2JlLmNvbS9jaGVja3N1bT0iMS4wIiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iPgogICAgICAgICA8eG1wOkNyZWF0b3JUb29sPkFkb2JlIFBob3Rvc2hvcCBDQyAyMDE1PC94bXA6Q3JlYXRvclRvb2w+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPg0KG8cAAAAOSURBVHgB7cEBDAAAAMAg71/bF20AAAACU5l4fQAAAiVJREFUeJzt0DEBAAAIA7BJ/0zH2AsHwQBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwB7gEBAAAAAAAAAGM8AABkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAHuAQEAAAAAAAAgDEeAAAZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwHwEAAAAAAB4BHwAAAAEAAAAASUVORK5CYII=',
+        'base64'
+      );
+      await fs.writeFile(assetPath, fallbackPng);
+      paths.push(assetPath);
+    }
+
+    return paths;
+  }
+
+  async simulateVideoGeneration(script, visualAssets, audioPath, outputPath) {
+    this.logger.info('Simulating video generation...');
+    
+    const infoPath = outputPath + '.info';
+    await fs.writeFile(infoPath, JSON.stringify({
+      message: 'AI video would be generated here',
+      script: script.title,
+      visualAssets: visualAssets.length,
+      audioPath: audioPath,
+      timestamp: new Date().toISOString()
+    }, null, 2));
+    
+    return infoPath;
+  }
+
+  async simulateThumbnailGeneration(script, style) {
+    this.logger.info('Generating PNG thumbnail...');
+    
+    const thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_${Date.now()}.png`);
+    await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
+    const safeTitle = this.escapeHtml(script?.title || 'YouTube Automation Video');
+
+    let sharp = null;
+    try {
+      sharp = require('sharp');
+    } catch (_err) { /* ignore */ }
+
+    if (sharp) {
+      try {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+          <defs>
+            <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#1e1b4b"/>
+              <stop offset="100%" stop-color="#431407"/>
+            </linearGradient>
+          </defs>
+          <rect width="1280" height="720" fill="url(#bg)"/>
+          <text x="640" y="380" font-family="sans-serif" font-size="48" font-weight="bold" fill="#fde047" text-anchor="middle">${safeTitle.substring(0, 45)}</text>
+        </svg>`;
+        await sharp(Buffer.from(svg)).png().toFile(thumbnailPath);
+        return { path: thumbnailPath, dimensions: { width: 1280, height: 720 }, fileSize: 1024, simulated: true };
+      } catch (_err) { /* fallback */ }
+    }
+
+    const fallbackPng = Buffer.from(
+      'iVBORw0KGgoAAAANSU5QAAAAIAAACAAACAAAAA/Xg+MAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAACXBIWXMAAAsTAAALEwEAmpwYAAABWWlYWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iWE1QIENvcmUgNS40LjAiPgogICA8cmRmOlJERiB4bWxuczpjaGVja3N1bT0iaHR0cDovL25zLmFkb2JlLmNvbS9jaGVja3N1bT0iMS4wIiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPgogICAgICA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iPgogICAgICAgICA8eG1wOkNyZWF0b3JUb29sPkFkb2JlIFBob3Rvc2hvcCBDQyAyMDE1PC94bXA6Q3JlYXRvclRvb2w+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPg0KG8cAAAAOSURBVHgB7cEBDAAAAMAg71/bF20AAAACU5l4fQAAAiVJREFUeJzt0DEBAAAIA7BJ/0zH2AsHwQBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwB7gEBAAAAAAAAAGM8AABkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAHuAQEAAAAAAAAgDEeAAAZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwHwEAAAAAAB4BHwAAAAEAAAAASUVORK5CYII=',
+      'base64'
+    );
+    await fs.writeFile(thumbnailPath, fallbackPng);
+    return {
+      path: thumbnailPath,
+      dimensions: { width: 1280, height: 720 },
+      fileSize: 1024,
+      simulated: true
+    };
+  }
+}
+
+module.exports = { AIVideoGenerator };

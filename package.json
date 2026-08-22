@@ -1,0 +1,62 @@
+{
+  "name": "youtube-automation-agent",
+  "version": "1.0.0",
+  "description": "Lumen is an open-source AI agent that runs a YouTube channel end to end",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ermradulsharma/youtube-automation-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ermradulsharma/youtube-automation-agent/issues"
+  },
+  "homepage": "https://github.com/ermradulsharma/youtube-automation-agent#readme",
+  "scripts": {
+    "start": "node index.js",
+    "setup": "node setup.js",
+    "walkthrough": "node walkthrough.js",
+    "growth:snapshot": "node scripts/growth/snapshot-github.js",
+    "scheduler": "node schedules/daily-automation.js",
+    "test": "node test.js",
+    "agent:strategy": "node agents/content-strategy-agent.js",
+    "agent:script": "node agents/script-writer-agent.js",
+    "agent:thumbnail": "node agents/thumbnail-designer-agent.js",
+    "agent:seo": "node agents/seo-optimizer-agent.js",
+    "agent:production": "node agents/production-management-agent.js",
+    "agent:publishing": "node agents/publishing-scheduling-agent.js",
+    "agent:analytics": "node agents/analytics-optimization-agent.js",
+    "credentials:setup": "node utils/credential-manager.js setup",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "@google/genai": "^2.18.0",
+    "axios": "^1.19.0",
+    "chalk": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "form-data": "^4.0.6",
+    "googleapis": "^176.0.0",
+    "inquirer": "^14.1.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.51.0",
+    "moment": "^2.30.1",
+    "node-cron": "^4.6.0",
+    "openai": "^7.5.0",
+    "playwright": "^1.62.1",
+    "replicate": "^1.4.0",
+    "sqlite3": "^6.0.1",
+    "winston": "^3.19.0",
+    "sharp": "^0.35.3"
+  },
+  "optionalDependencies": {
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "eslint": "10.9.0",
+    "@eslint/js": "10.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

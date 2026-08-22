@@ -333,14 +333,14 @@ class YouTubeAutomationAgent {
         };
     }
     setupAPI() {
-        const limiter = rateLimit({
+        this.limiter = rateLimit({
             windowMs: 15 * 60 * 1000,
             max: 500,
             standardHeaders: true,
             legacyHeaders: false,
             message: { error: 'Too many requests, please try again later.' }
         });
-        this.app.use(limiter);
+        this.app.use(this.limiter);
         this.app.use(express.json({ limit: '1mb' }));
         this.app.use(express.static(path.join(__dirname, 'dashboard')));
 
@@ -366,7 +366,7 @@ class YouTubeAutomationAgent {
         });
 
         // Manual content generation
-        this.app.post('/generate', this.requireAPIKey(), async (req, res) => {
+        this.app.post('/generate', this.limiter, this.requireAPIKey(), async (req, res) => {
             try {
                 if (this.setupRequired) {
                     return res.status(503).json({ success: false, error: 'Finish setup with npm run walkthrough before generating content' });
@@ -624,7 +624,7 @@ class YouTubeAutomationAgent {
             }
         });
 
-        this.app.get('/api/content/:productionId/shorts/:clipId/asset/:kind', async (req, res) => {
+        this.app.get('/api/content/:productionId/shorts/:clipId/asset/:kind', this.limiter, async (req, res) => {
             try {
                 const clip = await this.db.getShortClip(req.params.clipId);
                 if (!clip || clip.productionId !== req.params.productionId) return res.status(404).json({ error: 'Short asset not found' });
@@ -698,7 +698,7 @@ class YouTubeAutomationAgent {
             }
         });
 
-        this.app.get('/api/content/:productionId/scenes/:sceneId/asset', async (req, res) => {
+        this.app.get('/api/content/:productionId/scenes/:sceneId/asset', this.limiter, async (req, res) => {
             try {
                 let scene = await this.db.getProductionScene(req.params.productionId, req.params.sceneId);
                 let bundle = null;
@@ -829,7 +829,7 @@ class YouTubeAutomationAgent {
             return res.status(202).json({ success: true, result: job });
         });
 
-        this.app.get('/api/content/:productionId/asset/:kind', async (req, res) => {
+        this.app.get('/api/content/:productionId/asset/:kind', this.limiter, async (req, res) => {
             try {
                 const bundle = await this.db.getProductionBundle(req.params.productionId);
                 if (!bundle) return res.status(404).json({ error: 'Content not found' });

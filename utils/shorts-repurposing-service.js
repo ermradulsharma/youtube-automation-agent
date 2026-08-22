@@ -5,6 +5,22 @@ const { Logger } = require('./logger');
 
 const LAYOUTS = new Set(['blur', 'crop', 'stacked']);
 
+function cleanPathSegment(segment) {
+  if (typeof segment !== 'string') segment = String(segment || '');
+  const basename = path.basename(segment).replace(/[^a-zA-Z0-9_\-.]/g, '');
+  return basename || 'default';
+}
+
+function safePathResolve(baseDir, ...segments) {
+  const clean = segments.map(cleanPathSegment);
+  const baseResolved = path.resolve(baseDir);
+  const target = path.resolve(baseResolved, ...clean);
+  if (!target.startsWith(baseResolved + path.sep) && target !== baseResolved) {
+    throw new Error('Path traversal validation failed');
+  }
+  return target;
+}
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || minimum));
 }
@@ -177,10 +193,10 @@ class ShortsRepurposingService {
     const sourceScenes = (bundle.scenes || []).filter(scene => clip.sourceSceneIds.includes(scene.id));
     if (!sourceScenes.length) throw new Error('The selected source scenes no longer exist');
 
-    const directory = path.join(this.dataRoot, productionId);
+    const directory = safePathResolve(this.dataRoot, productionId);
     await fs.mkdir(directory, { recursive: true });
-    const outputPath = path.join(directory, `${clip.id}.mp4`);
-    const captionsPath = path.join(directory, `${clip.id}.srt`);
+    const outputPath = safePathResolve(directory, `${clip.id}.mp4`);
+    const captionsPath = safePathResolve(directory, `${clip.id}.srt`);
     await fs.writeFile(captionsPath, this.buildCaptions(sourceScenes, clip.duration), 'utf8');
     await this.db.updateShortClip(clip.id, { status: 'rendering', error: null });
 

@@ -8,6 +8,22 @@ const { ProvenanceService } = require('./provenance-service');
 const VIDEO_EXTENSIONS = new Set(['.mp4']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
+function cleanPathSegment(segment) {
+  if (typeof segment !== 'string') segment = String(segment || '');
+  const basename = path.basename(segment).replace(/[^a-zA-Z0-9_\-.]/g, '');
+  return basename || 'default';
+}
+
+function safePathResolve(baseDir, ...segments) {
+  const clean = segments.map(cleanPathSegment);
+  const baseResolved = path.resolve(baseDir);
+  const target = path.resolve(baseResolved, ...clean);
+  if (!target.startsWith(baseResolved + path.sep) && target !== baseResolved) {
+    throw new Error('Path traversal validation failed');
+  }
+  return target;
+}
+
 function textFromSection(section = {}) {
   if (typeof section.content === 'string') return section.content;
   if (Array.isArray(section.content)) return section.content.filter(item => typeof item === 'string' && !item.startsWith('[')).join(' ');
@@ -267,7 +283,7 @@ class SceneRepairService {
     }
 
     const before = scene;
-    const outputPath = path.join(this.dataRoot, 'audio', 'scenes', productionId, `${String(scene.position).padStart(3, '0')}_r${scene.revision + 1}.mp3`);
+    const outputPath = safePathResolve(this.dataRoot, 'audio', 'scenes', productionId, `${String(scene.position).padStart(3, '0')}_r${scene.revision + 1}.mp3`);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     try {
       await this.db.updateProductionScene(productionId, sceneId, {
@@ -401,7 +417,7 @@ class SceneRepairService {
     if (estimate.paid && input.confirmPaid !== true) throw this.error('Confirm the paid scene regeneration before starting it', 409, 'PAID_CONFIRMATION_REQUIRED', estimate);
 
     const before = scene;
-    let visual = {};
+    let visual;
     let narration = {};
     try {
       await this.db.updateProductionScene(productionId, sceneId, { status: 'generating' });
@@ -412,7 +428,7 @@ class SceneRepairService {
           prompt: scene.prompt, duration: estimate.generatedSeconds, resolution: settings.resolution,
           aspectRatio: settings.aspectRatio, generateAudio: false, referenceImages: []
         });
-        const outputPath = path.join(this.dataRoot, 'videos', 'scenes', `${productionId}_${scene.id}_r${scene.revision + 1}.mp4`);
+        const outputPath = safePathResolve(this.dataRoot, 'videos', 'scenes', `${productionId}_${scene.id}_r${scene.revision + 1}.mp4`);
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         const result = await this.mediaGeneration.generateClip({
           jobId: `repair_${productionId}_${scene.id}_${scene.revision + 1}`,
@@ -433,7 +449,7 @@ class SceneRepairService {
       }
 
       if (scene.narrationStatus === 'stale' || input.regenerateNarration === true) {
-        const audioPath = path.join(this.dataRoot, 'audio', 'scenes', productionId, `${String(scene.position).padStart(3, '0')}_r${scene.revision + 1}.mp3`);
+        const audioPath = safePathResolve(this.dataRoot, 'audio', 'scenes', productionId, `${String(scene.position).padStart(3, '0')}_r${scene.revision + 1}.mp3`);
         await fs.mkdir(path.dirname(audioPath), { recursive: true });
         const generatedPath = await this.videoGenerator.generateTTSAudio(scene.scriptText, audioPath);
         if (!await this.videoGenerator.isUsableAudioFile(generatedPath)) {
@@ -484,8 +500,8 @@ class SceneRepairService {
     if ((assetType === 'video' && !VIDEO_EXTENSIONS.has(extension)) || (assetType === 'image' && !IMAGE_EXTENSIONS.has(extension))) {
       throw this.error('Replacement asset file type is not supported', 415);
     }
-    const directory = path.join(this.dataRoot, 'scene-assets', productionId);
-    const outputPath = path.join(directory, `${scene.id}_r${scene.revision + 1}${extension}`);
+    const directory = safePathResolve(this.dataRoot, 'scene-assets', productionId);
+    const outputPath = safePathResolve(directory, `${scene.id}_r${scene.revision + 1}${extension}`);
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(outputPath, file.buffer);
     try {
@@ -537,14 +553,15 @@ class SceneRepairService {
     if (missing.length) throw this.error(`Cannot rebuild: ${missing.join('; ')}`, 409, 'SCENE_REBUILD_BLOCKED', { blockers: missing });
 
     const timestamp = Date.now();
-    const visualPath = path.join(this.dataRoot, 'videos', `${productionId}_repair_${timestamp}_visual.mp4`);
-    const finalPath = path.join(this.dataRoot, 'videos', `${productionId}_repair_${timestamp}.mp4`);
-    const captionsPath = path.join(this.dataRoot, 'captions', `${productionId}_repair_${timestamp}.srt`);
+    const visualPath = safePathResolve(this.dataRoot, 'videos', `${productionId}_repair_${timestamp}_visual.mp4`);
+    const finalPath = safePathResolve(this.dataRoot, 'videos', `${productionId}_repair_${timestamp}.mp4`);
+    const captionsPath = safePathResolve(this.dataRoot, 'captions', `${productionId}_repair_${timestamp}.srt`);
     await fs.mkdir(path.dirname(finalPath), { recursive: true });
     await fs.mkdir(path.dirname(captionsPath), { recursive: true });
     for (const scene of scenes) {
       if (!scene.assetPath || scene.assetPath.endsWith('.info') || !IMAGE_EXTENSIONS.has(path.extname(scene.assetPath).toLowerCase())) {
-        const replacement = await this.videoGenerator.simulateVisualAssets(scene.prompt || scene.scriptText || 'Scene Visual', 'ethereal', 1);
+        const genFn = this.videoGenerator.generateVisualAssets ? this.videoGenerator.generateVisualAssets.bind(this.videoGenerator) : this.videoGenerator.simulateVisualAssets?.bind(this.videoGenerator);
+        const replacement = genFn ? await genFn(scene.prompt || scene.scriptText || 'Scene Visual', 'ethereal', 1) : ['fallback.png'];
         scene.assetPath = replacement[0];
         scene.assetType = 'image';
       }

@@ -8,6 +8,11 @@ const { Logger } = require('./logger');
 const { runFFmpeg, checkFFmpeg, ffmpegInstallHint } = require('./ffmpeg');
 const { MediaGenerationService } = require('./media-generation-service');
 
+function safeResolve(filePath) {
+  if (typeof filePath !== 'string') return '';
+  return path.resolve(filePath);
+}
+
 class AIVideoGenerator {
   constructor(credentials, options = {}) {
     this.logger = new Logger('AIVideoGenerator');
@@ -183,13 +188,14 @@ class AIVideoGenerator {
     }
 
     // Gemini returns raw PCM (24kHz, mono, 16-bit); encode to the requested container via FFmpeg
-    const pcmPath = outputPath + '.pcm';
+    const targetOut = safeResolve(outputPath);
+    const pcmPath = safeResolve(outputPath + '.pcm');
     await fs.writeFile(pcmPath, Buffer.from(audioData, 'base64'));
-    await runFFmpeg(['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcmPath, outputPath]);
+    await runFFmpeg(['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcmPath, targetOut]);
     await fs.unlink(pcmPath).catch(() => {});
 
     this.logger.info('Gemini TTS generation complete');
-    return outputPath;
+    return targetOut;
   }
 
   async generateVisualAssets(prompt, style = "ethereal", count = 1) {
@@ -789,13 +795,16 @@ class AIVideoGenerator {
   }
 
   async addAudioToVideo(videoPath, audioPath, outputPath, options = {}) {
-    const hasRealAudio = await this.isUsableAudioFile(audioPath);
+    const safeVideo = safeResolve(videoPath);
+    const safeAudio = safeResolve(audioPath);
+    const safeOutput = safeResolve(outputPath);
+    const hasRealAudio = await this.isUsableAudioFile(safeAudio);
 
     if (!hasRealAudio) {
       if (options.allowSilent === true) {
         this.logger.warn('Creating an intentionally silent video from an operator-confirmed override.');
-        if (videoPath !== outputPath) await fs.copyFile(videoPath, outputPath);
-        return outputPath;
+        if (safeVideo !== safeOutput) await fs.copyFile(safeVideo, safeOutput);
+        return safeOutput;
       }
       const error = new Error('Narration audio is required. Regenerate narration or explicitly confirm an intentional silent video.');
       error.code = 'NARRATION_REQUIRED';
@@ -803,19 +812,19 @@ class AIVideoGenerator {
     }
 
     // FFmpeg cannot write to its own input, so mux to a temp file when paths collide
-    const muxPath = outputPath === videoPath
-      ? outputPath.replace(/\.mp4$/i, '_muxed.mp4')
-      : outputPath;
+    const muxPath = safeOutput === safeVideo
+      ? safeResolve(safeOutput.replace(/\.mp4$/i, '_muxed.mp4'))
+      : safeOutput;
 
-    const videoInput = options.loopVideo ? ['-stream_loop', '-1', '-i', videoPath] : ['-i', videoPath];
-    await runFFmpeg(['-y', ...videoInput, '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-shortest', muxPath]);
+    const videoInput = options.loopVideo ? ['-stream_loop', '-1', '-i', safeVideo] : ['-i', safeVideo];
+    await runFFmpeg(['-y', ...videoInput, '-i', safeAudio, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-shortest', muxPath]);
 
-    if (muxPath !== outputPath) {
-      await fs.rename(muxPath, outputPath);
+    if (muxPath !== safeOutput) {
+      await fs.rename(muxPath, safeOutput);
     }
 
     this.logger.info('Audio added to video successfully');
-    return outputPath;
+    return safeOutput;
   }
 
   async isUsableAudioFile(audioPath) {
@@ -824,7 +833,8 @@ class AIVideoGenerator {
     }
 
     try {
-      const stats = await fs.stat(audioPath);
+      const safeAudio = safeResolve(audioPath);
+      const stats = await fs.stat(safeAudio);
       return stats.isFile() && stats.size > 0;
     } catch (error) {
       return false;
@@ -892,7 +902,7 @@ class AIVideoGenerator {
   async simulateTTSGeneration(text, outputPath) {
     this.logger.info('Simulating TTS generation...');
     
-    const infoPath = outputPath + '.info';
+    const infoPath = safeResolve(outputPath + '.info');
     await fs.writeFile(infoPath, JSON.stringify({
       message: 'AI TTS audio would be generated here',
       text: text.substring(0, 100) + '...',
@@ -974,7 +984,7 @@ class AIVideoGenerator {
     return infoPath;
   }
 
-  async simulateThumbnailGeneration(script, style) {
+  async simulateThumbnailGeneration(script, _style) {
     this.logger.info('Generating PNG thumbnail...');
     
     const thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', `thumbnail_${Date.now()}.png`);

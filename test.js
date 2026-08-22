@@ -2285,7 +2285,7 @@ class SystemTest {
       try {
         require(agentFile);
       } catch (error) {
-        throw new Error(`Failed to load ${agentFile}: ${error.message}`);
+        throw new Error(`Failed to load ${agentFile}: ${error.message}`, { cause: error });
       }
     }
 

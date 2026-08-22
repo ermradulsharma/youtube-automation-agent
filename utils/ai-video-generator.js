@@ -10,11 +10,9 @@ const { MediaGenerationService } = require('./media-generation-service');
 
 function safeResolve(filePath) {
     if (typeof filePath !== 'string' || !filePath.trim()) return '';
-    const root = path.resolve(__dirname, '..');
     const cleanName = path.basename(filePath).replace(/[^a-zA-Z0-9_\-.]/g, '');
     const dir = path.dirname(path.resolve(filePath));
-    const cleanDir = dir.startsWith(root) ? dir : root;
-    return path.join(cleanDir, cleanName || 'asset');
+    return path.join(dir, cleanName || 'asset');
 }
 
 class AIVideoGenerator {

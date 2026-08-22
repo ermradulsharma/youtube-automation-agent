@@ -1228,13 +1228,15 @@ class YouTubeAutomationAgent {
                 jobId,
                 strategyContext: input.strategyContext
             });
+            const currentJob = await this.db.getGenerationJob(jobId);
+            const currentDetails = currentJob?.details || {};
             await this.db.updateGenerationJob(jobId, {
                 status: 'completed',
                 stage: result.reviewStatus === 'approved' ? 'scheduled' : result.reviewStatus,
                 progress: 100,
                 productionId: result.contentId,
                 title: result.title,
-                details: { reviewStatus: result.reviewStatus, qualityScore: result.qualityScore },
+                details: { ...currentDetails, reviewStatus: result.reviewStatus, qualityScore: result.qualityScore },
                 completedAt: new Date().toISOString()
             });
             await this.db.setSetting('last_content_generation', new Date().toISOString());

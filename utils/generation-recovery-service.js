@@ -77,7 +77,7 @@ class GenerationRecoveryService {
 
   async validateArtifact(stage, artifact) {
     if (!artifact || typeof artifact !== 'object') return false;
-    if (stage === 'strategy') return Boolean(artifact && artifact.topic && artifact.angle);
+    if (stage === 'strategy') return Boolean(artifact && (artifact.topic || artifact.angle));
     if (stage === 'script') return Boolean(artifact.title && (artifact.fullScript || artifact.mainContent));
     if (stage === 'thumbnail') return this.validatePathArtifact(artifact.path);
     if (stage === 'seo') return Boolean(artifact.title && artifact.description && Array.isArray(artifact.tags));

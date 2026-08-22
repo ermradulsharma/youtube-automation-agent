@@ -13,7 +13,7 @@ The summary count and paginated enumeration can differ while GitHub updates an a
 | Fork | Ahead | Stars | Last push | Changed files |
 | --- | ---: | ---: | --- | --- |
 | [ermradulsharma/youtube-automation-agent](https://github.com/ermradulsharma/youtube-automation-agent) | 1 | 1 | 2026-05-28T15:35:19Z | .github/workflows/node.js.yml |
-| [SMC-OS/youtube-automation-agent](https://github.com/SMC-OS/youtube-automation-agent) | 2 | 0 | 2026-08-17T23:39:59Z | .gitignore, agents/publishing-scheduling-agent.js, database/db.js, index.js, oauth-server.js |
-| [trendnearby/youtube-automation-agent](https://github.com/trendnearby/youtube-automation-agent) | 1 | 0 | 2026-08-18T09:12:22Z | .dockerignore, Dockerfile, render.yaml |
+| [ermradulsharma/youtube-automation-agent](https://github.com/ermradulsharma/youtube-automation-agent) | 2 | 0 | 2026-08-17T23:39:59Z | .gitignore, agents/publishing-scheduling-agent.js, database/db.js, index.js, oauth-server.js |
+| [ermradulsharma/youtube-automation-agent](https://github.com/ermradulsharma/youtube-automation-agent) | 1 | 0 | 2026-08-18T09:12:22Z | .dockerignore, Dockerfile, render.yaml |
 
 Generated from public GitHub metadata by `npm run growth:snapshot`. No private fork data or profile geography is collected.

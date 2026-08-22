@@ -10,10 +10,10 @@ const { MediaGenerationService } = require('./media-generation-service');
 
 function safeResolve(filePath) {
     if (typeof filePath !== 'string' || !filePath.trim()) return '';
-    const clean = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
-    const basename = path.basename(clean);
-    const dirname = path.dirname(clean);
-    return path.resolve(dirname, basename);
+    const root = path.resolve(__dirname, '..');
+    const normalized = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
+    const resolved = path.resolve(root, normalized);
+    return resolved;
 }
 
 class AIVideoGenerator {
@@ -834,14 +834,20 @@ class AIVideoGenerator {
         if (typeof audioPath !== 'string' || !audioPath.trim() || audioPath.endsWith('.info')) {
             return false;
         }
-        const cleanPath = path.normalize(audioPath);
-        if (cleanPath.includes('..')) {
+
+        const projectRoot = path.resolve(__dirname, '..');
+        const filename = path.basename(audioPath);
+        if (!filename || filename.includes('..') || audioPath.includes('..')) {
+            return false;
+        }
+
+        const resolvedPath = path.resolve(audioPath);
+        if (!resolvedPath.startsWith(projectRoot + path.sep) && resolvedPath !== projectRoot) {
             return false;
         }
 
         try {
-            const safeAudio = safeResolve(cleanPath);
-            const stats = await fs.stat(safeAudio);
+            const stats = await fs.stat(resolvedPath);
             return stats.isFile() && stats.size > 0;
         } catch (error) {
             return false;

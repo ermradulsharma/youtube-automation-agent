@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs').promises;
 const { Logger } = require('./utils/logger');
@@ -332,30 +333,14 @@ class YouTubeAutomationAgent {
         };
     }
     setupAPI() {
-        const rateLimitStore = new Map();
-        const rateLimiter = (windowMs = 15 * 60 * 1000, maxRequests = 500) => {
-            return (req, res, next) => {
-                const ip = req.ip || req.socket?.remoteAddress || '127.0.0.1';
-                const now = Date.now();
-                const record = rateLimitStore.get(ip) || { count: 0, resetTime: now + windowMs };
-                if (now > record.resetTime) {
-                    record.count = 0;
-                    record.resetTime = now + windowMs;
-                }
-                record.count++;
-                rateLimitStore.set(ip, record);
-                res.setHeader('X-RateLimit-Limit', maxRequests);
-                res.setHeader('X-RateLimit-Remaining', Math.max(0, maxRequests - record.count));
-                res.setHeader('X-RateLimit-Reset', Math.ceil(record.resetTime / 1000));
-                if (record.count > maxRequests) {
-                    res.setHeader('Retry-After', Math.ceil((record.resetTime - now) / 1000));
-                    return res.status(429).json({ error: 'Too many requests, please try again later.' });
-                }
-                next();
-            };
-        };
-
-        this.app.use(rateLimiter(15 * 60 * 1000, 500));
+        const limiter = rateLimit({
+            windowMs: 15 * 60 * 1000,
+            max: 500,
+            standardHeaders: true,
+            legacyHeaders: false,
+            message: { error: 'Too many requests, please try again later.' }
+        });
+        this.app.use(limiter);
         this.app.use(express.json({ limit: '1mb' }));
         this.app.use(express.static(path.join(__dirname, 'dashboard')));
 

@@ -842,17 +842,18 @@ class AIVideoGenerator {
   }
 
   async downloadVideo(url, outputPath) {
+    const safeOutput = safeResolve(outputPath);
     const response = await axios({
       method: 'GET',
       url: url,
       responseType: 'stream'
     });
 
-    const writer = require('fs').createWriteStream(outputPath);
+    const writer = require('fs').createWriteStream(safeOutput);
     response.data.pipe(writer);
 
     return new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
+      writer.on('finish', () => resolve(safeOutput));
       writer.on('error', reject);
     });
   }

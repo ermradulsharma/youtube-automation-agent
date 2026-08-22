@@ -885,9 +885,20 @@ function provenanceFormData() {
   };
 }
 
+function secureRandomHex(length = 8) {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(length);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now()}_${(globalThis.performance?.now?.() || 0).toString(36)}`;
+}
+
 function clientId(prefix) {
-  const uuid = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  return `${prefix}_${uuid}`;
+  return `${prefix}_${secureRandomHex()}`;
 }
 
 function currentSourceOptions() {

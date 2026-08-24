@@ -1,9 +1,9 @@
 {
   "$schema": "https://mintlify.com/schema.json",
-  "name": "YouTube Automation Agent",
+  "name": "StudioMind - YouTube Automation Agent",
   "logo": {
-    "light": "/assets/banner.jpg",
-    "dark": "/assets/banner.jpg"
+    "light": "/assets/logo.jpg",
+    "dark": "/assets/logo.jpg"
   },
   "favicon": "/assets/favicon.svg",
   "colors": {

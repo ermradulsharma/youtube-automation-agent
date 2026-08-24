@@ -1,0 +1,33 @@
+---
+title: Architecture
+description: Overview of the multi-agent orchestrator architecture and pipeline execution flow.
+---
+
+# Architecture Overview
+
+YouTube Automation Agent uses an event-driven orchestrator (`index.js`) that manages specialized sub-agent execution pipelines.
+
+```
++-------------------------------------------------------------------+
+|                     Central Orchestrator                          |
++-------------------------------------------------------------------+
+       |                  |                 |               |
+       v                  v                 v               v
+ [Strategy Agent]   [Script Agent]   [Production]   [SEO & Thumbnail]
+       |                  |                 |               |
+       +------------------+-----------------+---------------+
+                                  |
+                                  v
+                        [Approval Gate Web UI]
+                                  |
+                                  v
+                      [Publishing & Analytics]
+```
+
+## System Components
+
+- **Orchestrator (`index.js`)**: Coordinates task passing, database states, and web server API routes.
+- **SQLite Database (`database/`)**: Stores pipeline state, generated scripts, video render metadata, and analytics.
+- **Agent Handlers (`agents/`)**: Isolated JavaScript modules executing specific tasks.
+- **Utils Engine (`utils/`)**: Modular helpers for FFmpeg processing, TTS generation, AI model routing, and YouTube API calls.
+- **Dashboard (`dashboard/`)**: Single-page application UI for monitoring and manual approval gates.

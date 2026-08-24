@@ -1,0 +1,24 @@
+---
+title: Autonomous Operator
+description: Running YouTube Automation Agent on cron schedules.
+---
+
+# Autonomous Operator Mode
+
+YouTube Automation Agent can run autonomously on daily cron schedules using `node-cron`.
+
+## Enabling Scheduler
+
+Run the scheduler service in the background or as a daemon:
+
+```bash
+npm run scheduler
+```
+
+## Schedule Configuration
+
+Automation schedules are defined in `schedules/daily-automation.js`. Default schedule settings include:
+- **09:00 AM**: Content Strategy Agent researches trends and queues topics.
+- **11:00 AM**: Script Writer & Production Agents generate video assets.
+- **02:00 PM**: Quality Gate notification sent to dashboard.
+- **05:00 PM**: Publishing Agent uploads approved content to YouTube.

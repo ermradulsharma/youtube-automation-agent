@@ -1,0 +1,45 @@
+---
+title: Quickstart
+description: Get up and running with YouTube Automation Agent in minutes.
+---
+
+# Quickstart Guide
+
+Follow these steps to set up and launch YouTube Automation Agent locally.
+
+## Prerequisites
+
+- **Node.js**: `>= 18.0.0`
+- **FFmpeg**: Installed on system PATH (or fallback bundled version)
+- **YouTube API Credentials**: OAuth 2.0 Client ID & Secret for channel management
+
+## Installation
+
+<Steps>
+  <Step title="Clone Repository">
+    ```bash
+    git clone https://github.com/ermradulsharma/youtube-automation-agent.git
+    cd youtube-automation-agent
+    ```
+  </Step>
+
+  <Step title="Install Dependencies">
+    ```bash
+    npm install
+    ```
+  </Step>
+
+  <Step title="Run Setup Walkthrough">
+    ```bash
+    npm run walkthrough
+    ```
+    This interactive console guide assists in setting up your `.env` configuration and YouTube OAuth credentials.
+  </Step>
+
+  <Step title="Start Dashboard & Orchestrator">
+    ```bash
+    npm start
+    ```
+    Open `http://localhost:3456` in your browser to access the control dashboard.
+  </Step>
+</Steps>

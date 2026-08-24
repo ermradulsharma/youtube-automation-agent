@@ -41,50 +41,46 @@
   ],
   "navigation": [
     {
-      "group": "Getting Started",
+      "group": "Get Started",
       "pages": [
         "introduction",
         "quickstart",
-        "configuration",
-        "architecture"
+        "authentication"
       ]
     },
     {
-      "group": "Specialized AI Agents",
+      "group": "Core Concepts",
       "pages": [
-        "agents/overview",
-        "agents/content-strategy-agent",
-        "agents/script-writer-agent",
-        "agents/thumbnail-designer-agent",
-        "agents/seo-optimizer-agent",
-        "agents/production-management-agent",
-        "agents/publishing-scheduling-agent",
-        "agents/analytics-optimization-agent"
+        "architecture",
+        "agents",
+        "approval-workflow",
+        "video-providers"
       ]
     },
     {
-      "group": "Features & Media Pipeline",
+      "group": "Guides",
       "pages": [
-        "features/ai-video-generation",
-        "features/tts-narration",
-        "features/shorts-repurposing",
-        "features/scene-retention-engine",
-        "features/quality-approval-gates"
+        "guides/first-video",
+        "guides/autonomous-operator",
+        "guides/shorts-repurposing",
+        "guides/scene-repair",
+        "guides/retention-analysis"
       ]
     },
     {
-      "group": "Deployment & Operations",
+      "group": "Configuration",
       "pages": [
-        "deployment/web-dashboard",
-        "deployment/cron-automation",
-        "deployment/environment-variables"
+        "configuration/environment-variables",
+        "configuration/ai-providers",
+        "configuration/channel-settings"
       ]
     },
     {
-      "group": "Developer Reference",
+      "group": "Reference",
       "pages": [
-        "api-reference/orchestrator-server",
-        "api-reference/cli-scripts"
+        "reference/npm-scripts",
+        "reference/dashboard-panels",
+        "reference/changelog"
       ]
     }
   ],

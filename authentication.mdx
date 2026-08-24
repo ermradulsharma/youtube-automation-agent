@@ -1,0 +1,38 @@
+---
+title: Authentication
+description: Setting up OAuth credentials for YouTube Data API v3 and AI service provider API keys.
+---
+
+# Authentication & Keys
+
+YouTube Automation Agent relies on OAuth 2.0 for YouTube interaction and standard API keys for AI generation engines.
+
+## YouTube OAuth 2.0 Setup
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a new project and enable the **YouTube Data API v3**.
+3. Configure your **OAuth Consent Screen**.
+4. Create **OAuth 2.0 Client IDs** (Desktop application or Web application).
+5. Set Redirect URI to `http://localhost:3456/oauth2callback`.
+6. Download credentials and save them into `config/credentials.json` or update your `.env` file:
+
+```env
+YOUTUBE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+YOUTUBE_CLIENT_SECRET=your_client_secret
+YOUTUBE_REDIRECT_URI=http://localhost:3456/oauth2callback
+```
+
+## AI Provider API Keys
+
+Add at least one LLM provider key to your `.env` file:
+
+```env
+# Primary LLM API Keys
+OPENAI_API_KEY=your_openai_key
+GEMINI_API_KEY=your_gemini_key
+OPENROUTER_API_KEY=your_openrouter_key
+
+# TTS / Narration Provider Keys
+ELEVENLABS_API_KEY=your_elevenlabs_key
+AZURE_SPEECH_KEY=your_azure_speech_key
+```

@@ -1,0 +1,28 @@
+---
+title: Generating Your First Video
+description: Step-by-step guide to generating your first AI YouTube video.
+---
+
+# Generating Your First Video
+
+Learn how to run an end-to-end video pipeline from topic input to published video.
+
+## Step-by-Step Guide
+
+1. **Trigger Script Generation**:
+   ```bash
+   npm run agent:script
+   ```
+2. **Run Production Assembly**:
+   ```bash
+   npm run agent:production
+   ```
+3. **Generate Thumbnail & SEO**:
+   ```bash
+   npm run agent:thumbnail
+   npm run agent:seo
+   ```
+4. **Review in Web Dashboard**:
+   Open `http://localhost:3456` and review the generated video in the **Pending Approval** panel.
+5. **Approve & Publish**:
+   Click **Approve** to schedule or publish to YouTube.

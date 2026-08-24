@@ -1,0 +1,40 @@
+---
+title: Environment Variables
+description: Complete reference of all environment variables supported by YouTube Automation Agent.
+---
+
+# Environment Variables Reference
+
+Configure environment variables in your `.env` file at the root of the repository.
+
+<ParamField path="PORT" type="number" default="3456">
+  Port number for the orchestrator HTTP server and web dashboard.
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Application environment mode (`development` or `production`).
+</ParamField>
+
+<ParamField path="OPENAI_API_KEY" type="string">
+  API key for OpenAI models (GPT-4o, OpenAI TTS).
+</ParamField>
+
+<ParamField path="GEMINI_API_KEY" type="string">
+  API key for Google Gemini AI models.
+</ParamField>
+
+<ParamField path="ELEVENLABS_API_KEY" type="string">
+  API key for ElevenLabs TTS voice generation.
+</ParamField>
+
+<ParamField path="YOUTUBE_CLIENT_ID" type="string">
+  OAuth 2.0 Client ID for YouTube Data API v3.
+</ParamField>
+
+<ParamField path="YOUTUBE_CLIENT_SECRET" type="string">
+  OAuth 2.0 Client Secret for YouTube Data API v3.
+</ParamField>
+
+<ParamField path="YOUTUBE_REDIRECT_URI" type="string" default="http://localhost:3456/oauth2callback">
+  OAuth 2.0 redirect callback URL.
+</ParamField>

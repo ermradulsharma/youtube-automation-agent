@@ -1,0 +1,27 @@
+---
+title: AI Provider Configuration
+description: Configuring LLM and TTS model priorities and fallbacks.
+---
+
+# AI Provider Configuration
+
+Set primary and fallback model preferences in `config/providers.json` or environment settings.
+
+```json
+{
+  "llm": {
+    "primary": "gemini-2.5-flash",
+    "fallback": "openai-gpt-4o",
+    "temperature": 0.7
+  },
+  "tts": {
+    "provider": "elevenlabs",
+    "voice_id": "21m00Tcm4TlvDq8ikWAM",
+    "fallback_provider": "openai"
+  },
+  "video": {
+    "provider": "minimax-h3",
+    "fallback": "ffmpeg-canvas"
+  }
+}
+```

@@ -3,7 +3,8 @@
   "name": "StudioMind - YouTube Automation Agent",
   "logo": {
     "light": "/assets/logo.jpg",
-    "dark": "/assets/logo.jpg"
+    "dark": "/assets/logo.jpg",
+    "height": 56
   },
   "favicon": "/assets/favicon.svg",
   "colors": {

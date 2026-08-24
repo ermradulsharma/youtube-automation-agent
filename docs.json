@@ -72,7 +72,8 @@
   },
   "logo": {
     "light": "/assets/logo.jpg",
-    "dark": "/assets/logo.jpg"
+    "dark": "/assets/logo.jpg",
+    "height": 56
   },
   "background": {
     "color": {
